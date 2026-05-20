@@ -38,14 +38,13 @@ const postSchema = new Schema<IPost>(
 );
 
 // Auto-generate slug from title if one isn't provided
-postSchema.pre("validate", function (next) {
+postSchema.pre("save", function (this: IPost) {
   if (!this.slug && this.title) {
     this.slug = this.title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/(^-|-$)/g, "");
   }
-  next();
 });
 
 export const Post = model<IPost>("Post", postSchema);

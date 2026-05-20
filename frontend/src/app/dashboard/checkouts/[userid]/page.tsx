@@ -1,24 +1,11 @@
-// src/app/dashboard/checkouts/[userid]/page.tsx
-// Patient-specific checkout dashboard: list checkouts, services, payment status,
-// totals, and add next checkout.
-
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import {
-  getCheckouts,
-  createCheckout,
-  updateCheckout,
-  deleteCheckout,
-  getPatient,
-} from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { createCheckout, getCheckouts, getPatient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -26,18 +13,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { Plus, Trash2, CheckCircle, Send } from "lucide-react";
-import { sendCheckoutEmail } from "@/lib/api";
+import { CalendarDays, Plus } from "lucide-react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
 type Checkout = {
   _id: string;
   patientId: string;
@@ -46,7 +27,8 @@ type Checkout = {
   appointmentDate: string;
   serviceProvided?: string;
   invoiceAmount: number;
-  invoicePaid: boolean;
+  amountPaid: number;
+  paymentStatus: "unpaid" | "partial" | "paid";
   emailSent: boolean;
   emailSentAt?: string;
   emailSubject?: string;
@@ -63,7 +45,6 @@ type Patient = {
   status?: string;
 };
 
-// Form state matches the existing /checkouts page dialog contract
 type FormState = {
   patientId: string;
   patientName: string;
@@ -71,7 +52,8 @@ type FormState = {
   appointmentDate: string;
   serviceProvided: string;
   invoiceAmount: string;
-  invoicePaid: string; // "false" | "true"
+  amountPaid: string;
+  paymentStatus: "unpaid" | "partial" | "paid";
   emailSubject: string;
   emailBody: string;
   nextAppointmentDate: string;
@@ -85,14 +67,14 @@ const emptyForm: FormState = {
   appointmentDate: "",
   serviceProvided: "",
   invoiceAmount: "0",
-  invoicePaid: "false",
-  emailSubject: "Thank you for your visit — Checkout Summary",
+  amountPaid: "0",
+  paymentStatus: "unpaid",
+  emailSubject: "Thank you for your visit — Visit Summary",
   emailBody: "",
   nextAppointmentDate: "",
   followUpNotes: "",
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 function toDateKey(input: string | Date | undefined) {
   if (!input) return "";
   const d = new Date(input);
@@ -100,26 +82,28 @@ function toDateKey(input: string | Date | undefined) {
   return d.toISOString().slice(0, 10);
 }
 
+function resolvePaymentStatus(invoiceAmount: number, amountPaid: number) {
+  if (amountPaid <= 0) return "unpaid";
+  if (invoiceAmount <= 0) return "paid";
+  if (amountPaid >= invoiceAmount) return "paid";
+  return "partial";
+}
+
+function formatOptionalDate(input: string | Date | undefined) {
+  if (!input) return "—";
+  return formatDate(input) || "—";
+}
+
 export default function PatientCheckoutsPage() {
-  // app router param name from folder: [userid]
   const params = useParams<{ userid: string }>();
   const patientId = params?.userid;
 
   const [loading, setLoading] = useState(true);
   const [patient, setPatient] = useState<Patient | null>(null);
   const [checkouts, setCheckouts] = useState<Checkout[]>([]);
-
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [sendingId, setSendingId] = useState<string | null>(null);
-
   const [form, setForm] = useState<FormState>(emptyForm);
-
-  const [nextCheckoutDate, setNextCheckoutDate] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    return toDateKey(d);
-  });
 
   useEffect(() => {
     if (!patientId) return;
@@ -127,27 +111,22 @@ export default function PatientCheckoutsPage() {
     async function load() {
       setLoading(true);
       try {
-        const [patientsRes, checkoutsRes] = await Promise.all([
+        const [patientRes, checkoutsRes] = await Promise.all([
           getPatient(patientId),
-          getCheckouts(),
+          getCheckouts(patientId),
         ]);
 
-        setPatient(patientsRes.data ?? patientsRes);
-
+        setPatient(patientRes.data ?? patientRes);
         const all = (checkoutsRes.data ?? []) as Checkout[];
-        const filtered = all.filter((c) => c.patientId === patientId);
-
-        // newest first for list
-        filtered.sort(
+        const sorted = [...all].sort(
           (a, b) =>
             new Date(b.appointmentDate).getTime() -
             new Date(a.appointmentDate).getTime()
         );
-
-        setCheckouts(filtered);
+        setCheckouts(sorted);
       } catch (err) {
         console.error(err);
-        alert("Failed to load patient checkouts.");
+        alert("Failed to load patient visits.");
       } finally {
         setLoading(false);
       }
@@ -157,52 +136,47 @@ export default function PatientCheckoutsPage() {
   }, [patientId]);
 
   const totals = useMemo(() => {
-    const totalAmount = checkouts.reduce((sum, c) => sum + c.invoiceAmount, 0);
-    const paidAmount = checkouts
-      .filter((c) => c.invoicePaid)
-      .reduce((sum, c) => sum + c.invoiceAmount, 0);
-    const unpaidAmount = totalAmount - paidAmount;
+    const treatmentCheckout = [...checkouts]
+      .reverse()
+      .find((c) => c.invoiceAmount > 0);
+    const treatmentTotal = treatmentCheckout?.invoiceAmount ?? 0;
+    const paidAmount = checkouts.reduce((sum, c) => sum + c.amountPaid, 0);
+    const remainingAmount = Math.max(treatmentTotal - paidAmount, 0);
 
-    return { totalAmount, paidAmount, unpaidAmount };
+    return { treatmentTotal, paidAmount, remainingAmount };
   }, [checkouts]);
 
-  const servicesGrouped = useMemo(() => {
-    // Group by appointment date for “services they take in the checkout”
-    const map = new Map<string, string[]>();
-    for (const c of checkouts) {
-      const key = toDateKey(c.appointmentDate);
-      if (!map.has(key)) map.set(key, []);
-      if (c.serviceProvided && c.serviceProvided.trim()) {
-        map.get(key)!.push(c.serviceProvided.trim());
-      }
-    }
-    const entries = Array.from(map.entries()).map(([dateKey, services]) => ({
-      dateKey,
-      services: Array.from(new Set(services)),
-    }));
-    // newest first
-    entries.sort((a, b) => (a.dateKey < b.dateKey ? 1 : -1));
-    return entries;
-  }, [checkouts]);
+  const isFirstVisit = checkouts.length === 0;
+  const latestCheckout = checkouts[0] ?? null;
+  const latestNextAppointment = latestCheckout?.nextAppointmentDate
+    ? toDateKey(latestCheckout.nextAppointmentDate)
+    : "";
+  const latestService = latestCheckout?.serviceProvided?.trim() ?? "";
 
-  function openNextCheckoutDialog() {
+  function openVisitDialog() {
     if (!patient) return;
 
-    const servicesFromLastCheckout =
-      checkouts.find((c) => c.serviceProvided && c.serviceProvided.trim())
-        ?.serviceProvided?.trim() ?? "";
+    const defaultVisitDate = latestNextAppointment || toDateKey(new Date());
 
-    const defaultBody = `Dear ${patient.name},\n\nThank you for visiting our clinic today. Please find your visit summary below.\n\nIf you have any questions, don't hesitate to contact us.\n\nWarm regards,\nDental Clinic Team`;
+    const defaultBody = `Dear ${patient.name},
+
+Thank you for visiting our clinic today. Please find your visit summary below.
+
+If you have any questions, don't hesitate to contact us.
+
+Warm regards,
+Dental Clinic Team`;
 
     setForm({
       ...emptyForm,
       patientId: patient._id,
       patientName: patient.name,
       patientEmail: patient.email,
-      appointmentDate: nextCheckoutDate,
-      serviceProvided: servicesFromLastCheckout,
-      invoiceAmount: String(totals.unpaidAmount || 0),
-      invoicePaid: "false",
+      appointmentDate: defaultVisitDate,
+      serviceProvided: "",
+      invoiceAmount: "0",
+      amountPaid: "0",
+      paymentStatus: "unpaid",
       emailSubject: emptyForm.emailSubject,
       emailBody: defaultBody,
       nextAppointmentDate: "",
@@ -215,79 +189,51 @@ export default function PatientCheckoutsPage() {
   async function handleCreateCheckout() {
     if (!patientId) return;
 
+    const invoiceAmount = Number(form.invoiceAmount) || 0;
+    const amountPaid = Number(form.amountPaid) || 0;
+    const paymentStatus = resolvePaymentStatus(invoiceAmount, amountPaid);
+
     setSaving(true);
     try {
       await createCheckout({
         ...form,
-        patientId: patientId,
-        invoiceAmount: parseFloat(form.invoiceAmount) || 0,
-        invoicePaid: form.invoicePaid === "true",
+        patientId,
+        invoiceAmount,
+        amountPaid,
+        paymentStatus,
       });
+
       setDialogOpen(false);
       setForm(emptyForm);
 
-      // reload
-      const res = await getCheckouts();
+      const res = await getCheckouts(patientId);
       const all = (res.data ?? []) as Checkout[];
-      const filtered = all
-        .filter((c) => c.patientId === patientId)
-        .sort(
-          (a, b) =>
-            new Date(b.appointmentDate).getTime() -
-            new Date(a.appointmentDate).getTime()
-        );
-      setCheckouts(filtered);
+      const sorted = [...all].sort(
+        (a, b) =>
+          new Date(b.appointmentDate).getTime() -
+          new Date(a.appointmentDate).getTime()
+      );
+      setCheckouts(sorted);
     } catch (err) {
       console.error(err);
-      alert("Failed to create checkout.");
+      alert("Failed to create visit record.");
     } finally {
       setSaving(false);
     }
   }
 
-  async function togglePaid(c: Checkout) {
-    try {
-      await updateCheckout(c._id, { invoicePaid: !c.invoicePaid });
-      setCheckouts((prev) =>
-        prev.map((x) =>
-          x._id === c._id ? { ...x, invoicePaid: !x.invoicePaid } : x
-        )
-      );
-    } catch (err) {
-      console.error(err);
-      alert("Failed to update payment status.");
-    }
-  }
+  const visitCostLabel = "Total treatment cost";
+  const visitCostHelp = isFirstVisit
+    ? "Enter the full amount for the first treatment plan."
+    : "Already stored on the first visit. Leave this as 0 for follow-ups.";
+  const paymentLabel = isFirstVisit ? "Paid now" : "Paid today";
 
-  async function handleDeleteCheckout(id: string) {
-    if (!confirm("Delete this checkout record?")) return;
-
-    try {
-      await deleteCheckout(id);
-      setCheckouts((prev) => prev.filter((c) => c._id !== id));
-    } catch (err) {
-      console.error(err);
-      alert("Failed to delete checkout.");
-    }
-  }
-
-  async function handleSendEmail(checkout: Checkout) {
-    setSendingId(checkout._id);
-    try {
-      await sendCheckoutEmail(checkout._id);
-      alert(`Email sent to ${checkout.patientEmail}!`);
-      setCheckouts((prev) =>
-        prev.map((x) =>
-          x._id === checkout._id ? { ...x, emailSent: true } : x
-        )
-      );
-    } catch (err: any) {
-      console.error(err);
-      alert(`Failed to send email: ${err.message}`);
-    } finally {
-      setSendingId(null);
-    }
-  }
+  const canSaveVisit =
+    !saving &&
+    !!form.patientId &&
+    !!form.appointmentDate &&
+    !!form.serviceProvided.trim() &&
+    (isFirstVisit ? Number(form.invoiceAmount) > 0 : true);
 
   if (loading) {
     return (
@@ -300,12 +246,10 @@ export default function PatientCheckoutsPage() {
   if (!patient) {
     return (
       <div className="p-6">
-        <h1 className="text-2xl font-bold text-gray-900">
-          Patient not found
-        </h1>
+        <h1 className="text-2xl font-bold text-gray-900">Patient not found</h1>
         <div className="mt-4">
           <Button asChild variant="outline">
-            <Link href="/dashboard/checkouts">Back to checkouts</Link>
+            <Link href="/dashboard/checkouts">Back to patients</Link>
           </Button>
         </div>
       </div>
@@ -314,241 +258,170 @@ export default function PatientCheckoutsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">
-            {patient.name}
-          </h1>
-          <p className="text-sm text-gray-500 mt-1">
-            {patient.email}
-          </p>
-          <div className="mt-2 text-xs text-gray-600">
-            Patient checkout payment totals
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-3">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">{patient.name}</h1>
+            <p className="mt-1 text-sm text-gray-500">{patient.email}</p>
           </div>
+
+          {latestNextAppointment ? (
+            <Card className="border-emerald-200 bg-emerald-50">
+              <CardContent className="space-y-2 p-4">
+                <div className="flex items-center gap-2">
+                  <CalendarDays className="h-4 w-4 text-emerald-700" />
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                    Next appointment
+                  </p>
+                </div>
+
+                <p className="text-base font-semibold text-emerald-950">
+                  {formatOptionalDate(latestNextAppointment)}
+                </p>
+
+                <p className="text-sm text-emerald-800">
+                  Open this appointment to record the service and payment for
+                  that day.
+                </p>
+
+                <Button
+                  onClick={openVisitDialog}
+                  className="mt-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Open appointment
+                </Button>
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
 
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-2">
             <Badge variant="secondary" className="rounded-full">
-              Total: {formatCurrency(totals.totalAmount)}
+              Visits: {checkouts.length}
             </Badge>
             <Badge variant="success" className="rounded-full">
-              Paid: {formatCurrency(totals.paidAmount)}
+              Treatment total: {formatCurrency(totals.treatmentTotal)}
             </Badge>
             <Badge variant="warning" className="rounded-full">
-              Remaining: {formatCurrency(totals.unpaidAmount)}
+              Remaining: {formatCurrency(totals.remainingAmount)}
             </Badge>
           </div>
 
-          <Button onClick={openNextCheckoutDialog} className="rounded-full">
-            <Plus className="h-4 w-4 mr-2" />
-            Add Next Checkout
+          <Button
+            onClick={openVisitDialog}
+            className="rounded-lg w-[160px] ml-[auto] bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            {isFirstVisit ? "Add First Visit" : "Add Next Visit"}
           </Button>
         </div>
       </div>
 
-      {/* Next checkout date */}
-      <Card className="rounded-3xl">
-        <CardContent className="p-6">
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-            <div className="space-y-1.5">
-              <Label>Next Checkout Date</Label>
-              <Input
-                type="date"
-                value={nextCheckoutDate}
-                onChange={(e) => setNextCheckoutDate(e.target.value)}
-              />
-            </div>
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+        <p className="font-medium">How this works</p>
+        <p className="mt-1">
+          The first visit stores the full treatment cost once. Each follow-up
+          visit is opened from the next appointment date, then the doctor adds
+          the service and payment for that specific day. Leave the next
+          appointment empty if this is the last appointment.
+        </p>
+      </div>
 
-            <div className="text-sm text-gray-600">
-              You’ll add a new checkout for this patient on the selected date.
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="rounded-xl border bg-white shadow-sm">
+        <div className="border-b px-6 py-4">
+          <h2 className="text-lg font-semibold text-gray-900">Visit history</h2>
+          <p className="text-sm text-gray-500">
+            Service, visit date, next appointment, total cost, amount paid, and
+            payment status.
+          </p>
+        </div>
 
-      {/* Services */}
-      <Card className="rounded-3xl">
-        <CardContent className="p-0">
-          <div className="px-6 py-5 border-b border-gray-200">
-            <h2 className="text-lg font-bold text-gray-900">
-              Services taken (by checkout date)
-            </h2>
-            <p className="text-sm text-gray-500 mt-1">
-              Derived from <span className="font-semibold">serviceProvided</span>.
-            </p>
-          </div>
-
-          {servicesGrouped.length === 0 ? (
-            <div className="p-6 text-muted-foreground">No services yet.</div>
-          ) : (
-            <div className="p-6 space-y-4">
-              {servicesGrouped.map((g) => (
-                <div
-                  key={g.dateKey}
-                  className="border border-gray-200 rounded-2xl p-4"
-                >
-                  <div className="font-semibold text-gray-900">
-                    {formatDate(g.dateKey)}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {g.services.length ? (
-                      g.services.map((svc) => (
-                        <span
-                          key={svc}
-                          className="inline-flex items-center px-2 py-1 border border-gray-200 rounded-full bg-white text-sm"
-                        >
-                          {svc}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-sm text-gray-500">—</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Checkout List + Payment status */}
-      <Card className="rounded-3xl">
-        <CardContent className="p-0">
-          <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-bold text-gray-900">
-                Checkout list & payment status
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">
-                Toggle paid/unpaid, send email, and add new checkouts.
-              </p>
-            </div>
-            <Button asChild variant="outline" className="rounded-full">
-              <Link href="/dashboard/checkouts">Back</Link>
-            </Button>
-          </div>
-
-          {checkouts.length === 0 ? (
-            <div className="p-6 text-muted-foreground">No checkouts for this patient.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-gradient-to-r from-emerald-500/10 to-transparent border-b-2 border-emerald-200">
-                    <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Date
-                    </th>
-                    <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Service
-                    </th>
-                    <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Invoice
-                    </th>
-                    <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Payment
-                    </th>
-                    <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Email
-                    </th>
-                    <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {checkouts.map((c) => {
-                    const remainingAfterThis =
-                      totals.unpaidAmount; // overall remaining; per-checkout remaining is just invoice if unpaid
-
-                    const paymentVariant = c.invoicePaid ? "success" : "warning";
-                    const paymentText = c.invoicePaid ? "Paid" : "Unpaid";
-                    return (
-                      <tr
-                        key={c._id}
-                        className="border-b border-gray-100 last:border-0 hover:bg-gradient-to-r hover:from-emerald-50 hover:to-transparent transition-colors"
+        {checkouts.length === 0 ? (
+          <div className="px-6 py-8 text-sm text-gray-500">No visits yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-gray-50">
+                  <th className="px-6 py-4 text-left font-semibold text-gray-700">
+                    Service
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold text-gray-700">
+                    Visit date
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold text-gray-700">
+                    Next appointment
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold text-gray-700">
+                    Total cost
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold text-gray-700">
+                    Paid now
+                  </th>
+                  <th className="px-6 py-4 text-left font-semibold text-gray-700">
+                    Payment status
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {checkouts.map((checkout) => (
+                  <tr key={checkout._id} className="border-b last:border-0">
+                    <td className="px-6 py-4 text-gray-900">
+                      {checkout.serviceProvided?.trim() || "—"}
+                    </td>
+                    <td className="px-6 py-4 text-gray-600">
+                      {formatDate(checkout.appointmentDate)}
+                    </td>
+                    <td className="px-6 py-4 text-gray-600">
+                      {checkout.nextAppointmentDate
+                        ? formatDate(checkout.nextAppointmentDate)
+                        : "—"}
+                    </td>
+                    <td className="px-6 py-4 font-medium text-gray-900">
+                      {formatCurrency(checkout.invoiceAmount)}
+                    </td>
+                    <td className="px-6 py-4 font-medium text-gray-900">
+                      {formatCurrency(checkout.amountPaid)}
+                    </td>
+                    <td className="px-6 py-4">
+                      <Badge
+                        variant={
+                          checkout.paymentStatus === "paid"
+                            ? "success"
+                            : checkout.paymentStatus === "partial"
+                              ? "secondary"
+                              : "warning"
+                        }
+                        className="rounded-full"
                       >
-                        <td className="px-6 py-4 text-gray-700">
-                          {formatDate(c.appointmentDate)}
-                        </td>
-                        <td className="px-6 py-4 text-gray-600">
-                          {c.serviceProvided || "—"}
-                        </td>
-                        <td className="px-6 py-4 font-semibold text-gray-900">
-                          {formatCurrency(c.invoiceAmount)}
-                        </td>
-                        <td className="px-6 py-4">
-                          <button onClick={() => togglePaid(c)}>
-                            <Badge
-                              variant={paymentVariant}
-                              className="rounded-full"
-                            >
-                              {paymentText}
-                            </Badge>
-                          </button>
-                          {!c.invoicePaid ? (
-                            <div className="text-xs text-gray-500 mt-1">
-                              Remaining for this invoice: {formatCurrency(c.invoiceAmount)}
-                            </div>
-                          ) : (
-                            <div className="text-xs text-gray-500 mt-1">
-                              Overall remaining: {formatCurrency(remainingAfterThis)}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          {c.emailSent ? (
-                            <div className="flex items-center gap-1 text-green-600">
-                              <CheckCircle className="h-4 w-4" />
-                              <span className="text-xs">Sent</span>
-                            </div>
-                          ) : (
-                            <Badge variant="secondary">Not sent</Badge>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleSendEmail(c)}
-                              disabled={sendingId === c._id}
-                            >
-                              <Send className="h-3 w-3 mr-1" />
-                              {sendingId === c._id ? "Sending..." : "Send Email"}
-                            </Button>
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="text-destructive hover:text-destructive"
-                              onClick={() => handleDeleteCheckout(c._id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                        {checkout.paymentStatus === "paid"
+                          ? "Paid"
+                          : checkout.paymentStatus === "partial"
+                            ? "Partial"
+                            : "Unpaid"}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-      {/* New Checkout Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Add Checkout</DialogTitle>
+            <DialogTitle>
+              {isFirstVisit ? "Add First Visit" : "Add Next Visit"}
+            </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 mt-2">
             <div className="space-y-1.5">
-              <Label>Appointment Date *</Label>
+              <Label>Visit date *</Label>
               <Input
                 type="date"
                 value={form.appointmentDate}
@@ -559,10 +432,15 @@ export default function PatientCheckoutsPage() {
                   }))
                 }
               />
+              {!isFirstVisit && latestNextAppointment ? (
+                <p className="text-xs text-emerald-700">
+                  Prefilled from the scheduled next appointment.
+                </p>
+              ) : null}
             </div>
 
             <div className="space-y-1.5">
-              <Label>Service Provided</Label>
+              <Label>Service provided *</Label>
               <Input
                 value={form.serviceProvided}
                 onChange={(e) =>
@@ -573,47 +451,81 @@ export default function PatientCheckoutsPage() {
                 }
                 placeholder="e.g. Cleaning, Root Canal"
               />
+              <p className="text-xs text-slate-500">
+                Add the service that was performed on this specific day.
+              </p>
+              {!isFirstVisit && latestService ? (
+                <p className="text-xs text-amber-700">
+                  Previous visit service was: {latestService}
+                </p>
+              ) : null}
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Invoice Amount</Label>
-                <Input
-                  type="number"
-                  value={form.invoiceAmount}
-                  onChange={(e) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      invoiceAmount: e.target.value,
-                    }))
-                  }
-                />
-              </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {isFirstVisit ? (
+                <div className="space-y-1.5">
+                  <Label>{visitCostLabel}</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    value={form.invoiceAmount}
+                    onChange={(e) => {
+                      const nextAmount = e.target.value;
+                      setForm((prev) => {
+                        const shouldMirrorPayment =
+                          Number(prev.amountPaid) === 0;
+                        const mirroredPayment = shouldMirrorPayment
+                          ? nextAmount
+                          : prev.amountPaid;
+
+                        return {
+                          ...prev,
+                          invoiceAmount: nextAmount,
+                          amountPaid: mirroredPayment,
+                          paymentStatus: resolvePaymentStatus(
+                            Number(nextAmount) || 0,
+                            Number(mirroredPayment) || 0
+                          ),
+                        };
+                      });
+                    }}
+                  />
+                  <p className="text-xs text-slate-500">{visitCostHelp}</p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label>{visitCostLabel}</Label>
+                  <Input type="number" min="0" value="0" disabled />
+                  <p className="text-xs text-slate-500">{visitCostHelp}</p>
+                </div>
+              )}
 
               <div className="space-y-1.5">
-                <Label>Payment Status</Label>
-                <Select
-                  value={form.invoicePaid}
-                  onValueChange={(v) =>
+                <Label>{paymentLabel}</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  value={form.amountPaid}
+                  onChange={(e) => {
+                    const nextAmount = e.target.value;
                     setForm((prev) => ({
                       ...prev,
-                      invoicePaid: v,
-                    }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="false">Unpaid</SelectItem>
-                    <SelectItem value="true">Paid</SelectItem>
-                  </SelectContent>
-                </Select>
+                      amountPaid: nextAmount,
+                      paymentStatus: resolvePaymentStatus(
+                        Number(prev.invoiceAmount) || 0,
+                        Number(nextAmount) || 0
+                      ),
+                    }));
+                  }}
+                />
+                <p className="text-xs text-slate-500">
+                  Enter the amount collected for this appointment day.
+                </p>
               </div>
             </div>
 
             <div className="space-y-1.5">
-              <Label>Next Appointment Date</Label>
+              <Label>Next appointment date</Label>
               <Input
                 type="date"
                 value={form.nextAppointmentDate}
@@ -624,10 +536,28 @@ export default function PatientCheckoutsPage() {
                   }))
                 }
               />
+              <p className="text-xs text-slate-500">
+                Fill this only if the doctor wants another appointment. Leave it
+                blank to finish treatment.
+              </p>
             </div>
 
             <div className="space-y-1.5">
-              <Label>Email Subject</Label>
+              <Label>Payment status</Label>
+              <div className="rounded-md border bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                {form.paymentStatus === "paid"
+                  ? "Paid"
+                  : form.paymentStatus === "partial"
+                    ? "Partial"
+                    : "Unpaid"}
+                <span className="ml-2 text-xs text-slate-500">
+                  Automatically calculated from the amount paid.
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Email subject</Label>
               <Input
                 value={form.emailSubject}
                 onChange={(e) =>
@@ -640,7 +570,7 @@ export default function PatientCheckoutsPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label>Email Body (sent to patient)</Label>
+              <Label>Email body (sent to patient)</Label>
               <Textarea
                 value={form.emailBody}
                 onChange={(e) =>
@@ -658,20 +588,15 @@ export default function PatientCheckoutsPage() {
               <Button variant="outline" onClick={() => setDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button
-                onClick={handleCreateCheckout}
-                disabled={
-                  saving ||
-                  !form.patientId ||
-                  !form.appointmentDate ||
-                  !form.invoiceAmount
-                }
-              >
-                {saving ? "Saving..." : "Create Checkout"}
+              <Button onClick={handleCreateCheckout} disabled={!canSaveVisit}>
+                {saving
+                  ? "Saving..."
+                  : isFirstVisit
+                    ? "Save First Visit"
+                    : "Save Appointment"}
               </Button>
             </div>
 
-            {/* keep hidden fields alignment with the dialog concept */}
             <input type="hidden" value={form.patientId} readOnly />
           </div>
         </DialogContent>

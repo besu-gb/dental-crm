@@ -1,6 +1,3 @@
-// src/models/Patient.ts
-// Patient data schema and TypeScript interface
-
 import { Schema, model, Document, Types } from "mongoose";
 
 // ─── TypeScript Interface ─────────────────────────────────────────────────────
@@ -29,7 +26,11 @@ const patientSchema = new Schema<IPatient>(
     email: { type: String, required: true, trim: true, lowercase: true },
     phone: { type: String, trim: true },
     dateOfBirth: { type: Date },
-    gender: { type: String, enum: ["male", "female", "other"] },
+    gender: {
+      type: String,
+      enum: ["male", "female", "other"],
+      default: "male",
+    },
     address: { type: String, trim: true },
     notes: { type: String, trim: true }, // Medical notes — visible to staff only
     status: {
@@ -37,11 +38,11 @@ const patientSchema = new Schema<IPatient>(
       enum: ["active", "inactive"],
       default: "active",
     },
-    lastVisit: { type: Date }, // Updated automatically when a checkout is created
+    lastVisit: { type: Date },
   },
   {
     timestamps: true, // adds createdAt + updatedAt automatically
-  }
+  },
 );
 
 export const Patient = model<IPatient>("Patient", patientSchema);

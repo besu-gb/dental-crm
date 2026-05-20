@@ -133,7 +133,7 @@ export function CommandSearch({ open, onOpenChange }: CommandSearchProps) {
 
     // Apps
     { title: "Patients", url: "/dashboard/patients", group: "Apps", icon: Users },
-    { title: "Checkouts", url: "/dashboard/checkouts", group: "Apps", icon: CheckSquare },
+    { title: "Patient Visits", url: "/dashboard/checkouts", group: "Apps", icon: CheckSquare },
     { title: "Blogs", url: "/dashboard/posts", group: "Apps", icon: MessageCircle },
 
     // messages

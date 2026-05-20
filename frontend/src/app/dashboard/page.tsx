@@ -42,14 +42,19 @@ interface Stats {
   posts: { published: number; draft: number };
   contacts: { unread: number };
   checkouts: {
-    pendingInvoices: number;
+    unpaidCheckouts: number;
+    partialCheckouts: number;
+    paidCheckouts: number;
+    totalInvoiceAmount: number;
+    totalPaidAmount: number;
     recentCheckouts: Array<{
       _id: string;
       patientName: string;
       appointmentDate: string;
       serviceProvided: string;
       invoiceAmount: number;
-      invoicePaid: boolean;
+      amountPaid: number;
+      paymentStatus: "unpaid" | "partial" | "paid";
     }>;
   };
 }
@@ -118,7 +123,21 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6 bg-white z-[100]">
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+        <StatCard
+          title="Total Invoiced"
+          value={formatCurrency(stats.checkouts.totalInvoiceAmount)}
+          subtitle="All service charges"
+          icon={CreditCard}
+          color="bg-gradient-to-br from-slate-500 to-slate-700"
+        />
+        <StatCard
+          title="Total Paid"
+          value={formatCurrency(stats.checkouts.totalPaidAmount)}
+          subtitle="All payments received"
+          icon={CreditCard}
+          color="bg-gradient-to-br from-emerald-500 to-emerald-600"
+        />
         <StatCard
           title="Total Patients"
           value={stats.patients.total}
@@ -141,10 +160,22 @@ export default function DashboardPage() {
           color="bg-gradient-to-br from-emerald-500 to-emerald-600"
         />
         <StatCard
-          title="Unpaid Invoices"
-          value={stats.checkouts.pendingInvoices}
+          title="Unpaid Visits"
+          value={stats.checkouts.unpaidCheckouts}
           icon={CreditCard}
           color="bg-gradient-to-br from-rose-500 to-rose-600"
+        />
+        <StatCard
+          title="Partial Visits"
+          value={stats.checkouts.partialCheckouts}
+          icon={CreditCard}
+          color="bg-gradient-to-br from-amber-500 to-amber-600"
+        />
+        <StatCard
+          title="Paid Visits"
+          value={stats.checkouts.paidCheckouts}
+          icon={CreditCard}
+          color="bg-gradient-to-br from-emerald-500 to-emerald-600"
         />
         <StatCard
           title="Unread Messages"
@@ -206,7 +237,7 @@ export default function DashboardPage() {
           <CardHeader className="pb-6 relative">
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg font-bold text-gray-900">
-                Invoices Status
+                Visit Payment Status
               </CardTitle>
               <div className="h-8 w-1 bg-gradient-to-b from-emerald-400 to-emerald-600 rounded-full" />
             </div>
@@ -215,12 +246,13 @@ export default function DashboardPage() {
           <CardContent className="relative">
             <PieChart
               chartData={[
-                stats.checkouts.pendingInvoices,
-                stats.checkouts.pendingInvoices,
+                stats.checkouts.paidCheckouts,
+                stats.checkouts.partialCheckouts,
+                stats.checkouts.unpaidCheckouts,
               ]}
               chartOptions={{
-                labels: ["Paid", "Unpaid"],
-                colors: ["#10b981", "#ef4444"],
+                labels: ["Paid", "Partial", "Unpaid"],
+                colors: ["#10b981", "#f59e0b", "#ef4444"],
                 chart: { sparkline: { enabled: false } },
                 plotOptions: {
                   pie: { donut: { size: "75%" } },
@@ -349,12 +381,12 @@ export default function DashboardPage() {
             <div className="p-2 bg-gradient-to-br from-cyan-500 to-blue-500 rounded-lg">
               <TrendingUp className="h-5 w-5 text-white" />
             </div>
-            Recent Checkouts
+            Recent Visits
           </CardTitle>
         </CardHeader>
         <CardContent>
           {stats.checkouts.recentCheckouts.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No checkouts yet.</p>
+            <p className="text-muted-foreground text-sm">No visits yet.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -370,7 +402,10 @@ export default function DashboardPage() {
                       Date
                     </th>
                     <th className="text-left py-3 px-4 font-semibold text-gray-700">
-                      Amount
+                      Total cost
+                    </th>
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">
+                      Paid now
                     </th>
                     <th className="text-left py-3 px-4 font-semibold text-gray-700">
                       Status
@@ -395,12 +430,25 @@ export default function DashboardPage() {
                       <td className="py-4 px-4 font-semibold text-gray-900">
                         {formatCurrency(c.invoiceAmount)}
                       </td>
+                      <td className="py-4 px-4 font-semibold text-gray-900">
+                        {formatCurrency(c.amountPaid)}
+                      </td>
                       <td className="py-4 px-4">
                         <Badge
-                          variant={c.invoicePaid ? "success" : "warning"}
+                          variant={
+                            c.paymentStatus === "paid"
+                              ? "success"
+                              : c.paymentStatus === "partial"
+                                ? "secondary"
+                                : "warning"
+                          }
                           className="rounded-full"
                         >
-                          {c.invoicePaid ? "Paid" : "Unpaid"}
+                          {c.paymentStatus === "paid"
+                            ? "Paid"
+                            : c.paymentStatus === "partial"
+                              ? "Partial"
+                              : "Unpaid"}
                         </Badge>
                       </td>
                     </tr>

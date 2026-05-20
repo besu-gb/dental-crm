@@ -57,7 +57,8 @@ export const deletePost = (id: string) =>
   fetchAPI(`/api/posts/${id}`, { method: "DELETE" });
 
 // ─── Checkouts ────────────────────────────────────────────────────────────────
-export const getCheckouts = () => fetchAPI("/api/checkouts");
+export const getCheckouts = (patientId?: string) =>
+  fetchAPI(`/api/checkouts${patientId ? `?patientId=${patientId}` : ""}`);
 export const getCheckout = (id: string) => fetchAPI(`/api/checkouts/${id}`);
 export const createCheckout = (data: object) =>
   fetchAPI("/api/checkouts", { method: "POST", body: JSON.stringify(data) });

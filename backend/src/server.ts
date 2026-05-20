@@ -1,6 +1,3 @@
-// src/server.ts
-// Entry point — sets up Express, connects to MongoDB, and registers all routes
-
 import "dotenv/config"; // loads .env into process.env
 import express from "express";
 import cors from "cors";
@@ -16,11 +13,9 @@ import dashboardRouter from "./routes/dashboard.js";
 import webhooksRouter from "./routes/webhooks.js";
 
 const app = express();
-const PORT = process.env.PORT ?? 5000;
+const PORT = process.env.PORT || 5000;
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
-
-// Allow requests from the frontend (set FRONTEND_URL in .env)
 app.use(
   cors({
     origin: process.env.FRONTEND_URL ?? "http://localhost:3000",

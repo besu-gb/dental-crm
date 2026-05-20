@@ -3,38 +3,22 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
-import { getCheckouts, getPatients } from "@/lib/api";
+import { getPatients } from "@/lib/api";
 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
-
-import { formatDate } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 
 // ─── Types ─────────────────────────────────────────────────────
-
-interface Checkout {
-  _id: string;
-
-  patientId: {
-    _id: string;
-  };
-
-  patientName: string;
-  patientEmail: string;
-
-  serviceProvided?: string;
-  nextAppointmentDate?: string;
-  followUpNotes?: string;
-
-  createdAt?: string;
-}
 
 interface Patient {
   _id?: string;
   name?: string;
   email?: string;
+  phone?: string;
   gender?: string;
+  status: "active" | "inactive";
   lastVisit?: string;
 }
 
@@ -53,7 +37,6 @@ function toDateKey(input: string | Date | undefined) {
 // ─── Page ──────────────────────────────────────────────────────
 
 export default function CheckoutsPage() {
-  const [checkouts, setCheckouts] = useState<Checkout[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -86,27 +69,10 @@ export default function CheckoutsPage() {
     }
   }
 
-  // ─── Load Checkouts ─────────────────────────────────────────
-
-  async function loadCheckouts() {
-    try {
-      setLoading(true);
-
-      const res = await getCheckouts();
-
-      setCheckouts(res.data || []);
-    } catch (err) {
-      console.error("Failed to load checkouts:", err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   // ─── Effects ────────────────────────────────────────────────
 
   useEffect(() => {
     loadPatients();
-    loadCheckouts();
   }, []);
 
   // ─── Render ─────────────────────────────────────────────────
@@ -117,12 +83,10 @@ export default function CheckoutsPage() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">
-            Checkouts
-          </h1>
+          <h1 className="text-3xl font-bold text-gray-900">Patient Visits</h1>
 
           <p className="text-sm text-gray-500 mt-1">
-            Manage invoices and patient payments
+            Manage visit records, treatment costs, and payments
           </p>
         </div>
       </div>
@@ -132,34 +96,28 @@ export default function CheckoutsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex gap-4 items-end flex-wrap">
           <div className="space-y-1.5">
-            <Label>Checkout Date</Label>
+            <Label>Visit Date</Label>
 
             <Input
               type="date"
               value={selectedCheckoutDate}
-              onChange={(e) =>
-                setSelectedCheckoutDate(e.target.value)
-              }
+              onChange={(e) => setSelectedCheckoutDate(e.target.value)}
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label>Next Checkout Date</Label>
+            <Label>Follow-up appointment date</Label>
 
             <Input
               type="date"
               value={nextCheckoutDate}
-              onChange={(e) =>
-                setNextCheckoutDate(e.target.value)
-              }
+              onChange={(e) => setNextCheckoutDate(e.target.value)}
             />
           </div>
         </div>
 
         <div>
-          <p className="text-lg text-gray-700">
-            List of all patients
-          </p>
+          <p className="text-lg text-gray-700">List of all patients</p>
         </div>
       </div>
 
@@ -168,13 +126,9 @@ export default function CheckoutsPage() {
       <Card className="border-0 rounded-lg overflow-hidden bg-gradient-to-br from-slate-100 to-slate-100">
         <CardContent className="p-0">
           {loading ? (
-            <p className="p-6 text-muted-foreground">
-              Loading...
-            </p>
-          ) : checkouts.length === 0 ? (
-            <p className="p-6 text-muted-foreground">
-              No checkouts found.
-            </p>
+            <p className="p-6 text-muted-foreground">Loading...</p>
+          ) : patients.length === 0 ? (
+            <p className="p-6 text-muted-foreground">No patients found.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -185,21 +139,29 @@ export default function CheckoutsPage() {
                     </th>
 
                     <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Service
+                      Phone no
                     </th>
 
                     <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Next Appointment
+                      Email
                     </th>
 
                     <th className="text-left px-6 py-4 font-semibold text-gray-700">
-                      Created
+                      Gender
+                    </th>
+
+                    <th className="text-left px-6 py-4 font-semibold text-gray-700">
+                      Status
+                    </th>
+
+                    <th className="text-left px-6 py-4 font-semibold text-gray-700">
+                      Last Visit
                     </th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {checkouts.map((c) => (
+                  {patients.map((c) => (
                     <tr
                       key={c._id}
                       className="border-b border-gray-100 last:border-0 hover:bg-gradient-to-r hover:from-emerald-50 hover:to-transparent transition-colors"
@@ -208,40 +170,45 @@ export default function CheckoutsPage() {
 
                       <td className="px-6 py-4">
                         <Link
-                          href={`/dashboard/checkouts/${c.patientId?._id}`}
+                          href={`/dashboard/checkouts/${c._id}`}
                           className="block hover:underline"
                         >
                           <p className="font-semibold text-gray-900">
-                            {c.patientName}
+                            {c.name}
                           </p>
                         </Link>
 
-                        <p className="text-xs text-gray-500">
-                          {c.patientEmail}
-                        </p>
+                        <p className="text-xs text-gray-500">{c.email}</p>
                       </td>
 
-                      {/* Service */}
+                      {/* phone no */}
+
+                      <td className="px-6 py-4 text-gray-700">{c.phone}</td>
+
+                      {/* email */}
+
+                      <td className="px-6 py-4 text-gray-700">{c.email}</td>
+
+                      {/* gender */}
+
+                      <td className="px-6 py-4 text-gray-700">{c.gender}</td>
+
+                      {/* status */}
 
                       <td className="px-6 py-4 text-gray-700">
-                        {c.serviceProvided || "N/A"}
+                        <Badge
+                          variant={
+                            c.status === "active" ? "success" : "secondary"
+                          }
+                          className="rounded-full"
+                        >
+                          {c.status}
+                        </Badge>
                       </td>
 
-                      {/* Next Appointment */}
+                      {/* last visited */}
 
-                      <td className="px-6 py-4 text-gray-700">
-                        {c.nextAppointmentDate
-                          ? formatDate(c.nextAppointmentDate)
-                          : "N/A"}
-                      </td>
-
-                      {/* Created */}
-
-                      <td className="px-6 py-4 text-gray-700">
-                        {c.createdAt
-                          ? formatDate(c.createdAt)
-                          : "N/A"}
-                      </td>
+                      <td className="px-6 py-4 text-gray-700">{c.lastVisit}</td>
                     </tr>
                   ))}
                 </tbody>

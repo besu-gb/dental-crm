@@ -57,7 +57,7 @@ const data = {
           icon: Users,
         },
         {
-          title: "Checkups",
+          title: "Patient Visits",
           url: "/dashboard/checkouts",
           icon: CheckSquare,
         },
